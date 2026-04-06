@@ -1,0 +1,81 @@
+# Paperclip AI — Production
+# Fully isolated from n8n. Joins n8n's network for internal communication only.
+# n8n's docker-compose.yml is NOT modified.
+#
+# Deploy to: /root/paperclip/docker-compose.yml
+# Start:     cd /root/paperclip && docker-compose up -d --build
+# Stop:      cd /root/paperclip && docker-compose down
+# Logs:      cd /root/paperclip && docker-compose logs -f
+#
+# n8n reaches Paperclip at: http://paperclip:3100
+# Paperclip reaches n8n at: http://n8n:5678
+
+services:
+
+  # ============================================
+  # === PAPERCLIP POSTGRES (isolated from n8n) =
+  # ============================================
+  paperclip-db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${PAPERCLIP_DB_USER:-paperclip}
+      - POSTGRES_PASSWORD=${PAPERCLIP_DB_PASSWORD:-paperclip}
+      - POSTGRES_DB=${PAPERCLIP_DB_NAME:-paperclip}
+    volumes:
+      - paperclip_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PAPERCLIP_DB_USER:-paperclip}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  # ============================================
+  # === PAPERCLIP SERVER =======================
+  # ============================================
+  paperclip:
+    build:
+      context: .
+      dockerfile: Dockerfile.custom
+    restart: unless-stopped
+    ports:
+      # Localhost only — access via Nginx + VPN IP whitelist
+      - "127.0.0.1:3100:3100"
+    environment:
+      - PORT=3100
+      - SERVE_UI=true
+      - DATABASE_URL=postgres://${PAPERCLIP_DB_USER:-paperclip}:${PAPERCLIP_DB_PASSWORD:-paperclip}@paperclip-db:5432/${PAPERCLIP_DB_NAME:-paperclip}
+      - PAPERCLIP_DEPLOYMENT_MODE=authenticated
+      - PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+      - PAPERCLIP_PUBLIC_URL=${PAPERCLIP_PUBLIC_URL:-https://paperclip.elitedigitalagency.com}
+      - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      # AI provider keys — set in .env
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      paperclip-db:
+        condition: service_healthy
+    volumes:
+      - paperclip_data:/paperclip
+    networks:
+      - default
+      - n8n_network
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+volumes:
+  paperclip_pgdata:
+  paperclip_data:
+
+networks:
+  # Join n8n's existing network — no changes to n8n's compose needed
+  n8n_network:
+    external: true
+    name: elite_ai_default
